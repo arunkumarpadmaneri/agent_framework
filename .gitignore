@@ -1,0 +1,23 @@
+# Rebar3 build outputs
+_build/
+*.beam
+ebin/
+
+# Test artifacts
+.eunit/
+logs/
+
+# Editor files
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Erlang specific
+*.crashdump
+erl_crash.dump
+rebar.lock
+
+# Shell logs
+shell.log
