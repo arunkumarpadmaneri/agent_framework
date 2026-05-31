@@ -1,0 +1,17 @@
+[0;32m===> Verifying dependencies...
+[0m[0;32m===> Analyzing applications...
+[0m[0;32m===> Compiling agent_framework
+[0mErlang/OTP 27 [erts-15.2.7] [source] [64-bit] [smp:8:8] [ds:8:8:10] [async-threads:1] [jit:ns]
+
+2026-05-31T14:19:49.101345+05:30 [info] Application: jsx. Started at: nonode@nohost.
+2026-05-31T14:19:49.108382+05:30 [info] Supervisor: {local,agent_framework_sup}. Started: id=tool_registry,pid=<0.183.0>.
+Eshell V15.2.7 (press Ctrl+G to abort, type help(). for help)
+1> 2026-05-31T14:19:49.110591+05:30 [info] Supervisor: {local,agent_framework_sup}. Started: id=llm_router,pid=<0.186.0>.
+2026-05-31T14:19:49.113288+05:30 [info] Supervisor: {local,agent_framework_sup}. Started: id=session_mgr,pid=<0.187.0>.
+2026-05-31T14:19:49.114283+05:30 [info] Supervisor: {local,agent_framework_sup}. Started: id=rate_limiter,pid=<0.190.0>.
+2026-05-31T14:19:49.120543+05:30 [info] Supervisor: {local,agent_framework_sup}. Started: id=agent_registry,pid=<0.191.0>.
+2026-05-31T14:19:49.122529+05:30 [info] Supervisor: {local,agent_framework_sup}. Started: id=agent_orchestrator,pid=<0.192.0>.
+[0;32m===> Booted jsx
+[0m2026-05-31T14:19:49.122703+05:30 [info] Application: agent_framework. Started at: nonode@nohost.
+[0;32m===> Booted agent_framework
+[0m
