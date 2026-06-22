@@ -23,7 +23,7 @@
 -module(agent_registry).
 -behaviour(gen_server).
 
--export([start_link/0, lookup/1, list/0]).
+-export([start_link/0, lookup/1, list/0, register/1, unregister/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 start_link() ->
@@ -39,6 +39,12 @@ lookup(AgentId) ->
     []         -> {error, {unknown_agent, AgentId}}
   end.
 
+register(AgentDef) when is_map(AgentDef) ->
+  gen_server:call(?MODULE, {register, AgentDef}).
+
+unregister(AgentId) when is_atom(AgentId) ->
+  gen_server:call(?MODULE, {unregister, AgentId}).
+
 %% ---------------------------------------------------------------------------
 %% list/0 — return all registered agent id atoms
 %% ---------------------------------------------------------------------------
@@ -52,6 +58,14 @@ init([]) ->
   load_agents(),
   {ok, #{}}.
 
+handle_call({register, AgentDef}, _From, State) ->
+  Id = maps:get(id, AgentDef),
+  ets:insert(agent_definitions, {Id, AgentDef}),
+  af_logger:info(agent_registered, #{id => Id}),
+  {reply, ok, State};
+handle_call({unregister, AgentId}, _From, State) ->
+  ets:delete(agent_definitions, AgentId),
+  {reply, ok, State};
 handle_call(_Req, _From, State) -> {reply, ok, State}.
 handle_cast(_Msg, State)        -> {noreply, State}.
 handle_info(_Info, State)       -> {noreply, State}.
@@ -60,9 +74,41 @@ terminate(_Reason, _State)      -> ok.
 %% ─── INTERNAL ────────────────────────────────────────────────────────────────
 
 load_agents() ->
-  AgentDefs = application:get_env(agent_framework, agents, []),
+  BaseAgents   = application:get_env(agent_framework, agents, []),
+  DomainAgents = load_domain_configs(),
+  Agents       = BaseAgents ++ DomainAgents,
   lists:foreach(fun(Def) ->
-    Id = maps:get(id, Def),
-    ets:insert(agent_definitions, {Id, Def}),
-    af_logger:info(agent_loaded, #{id => Id})
-  end, AgentDefs).
+    case maps:find(id, Def) of
+      {ok, Id} ->
+        ets:insert(agent_definitions, {Id, Def}),
+        af_logger:info(agent_loaded, #{id => Id});
+      error ->
+        af_logger:error(agent_load_failed, #{reason => invalid_definition, def => Def})
+    end
+  end, Agents).
+
+load_domain_configs() ->
+  ConfigDir = "config/domains",
+  case file:list_dir(ConfigDir) of
+    {ok, Files} ->
+      ConfigFiles = lists:filter(fun(F) -> filename:extension(F) == ".config" end, Files),
+      lists:flatmap(fun(F) -> load_domain_file(filename:join(ConfigDir, F)) end, ConfigFiles);
+    {error, _} ->
+      []
+  end.
+
+load_domain_file(Path) ->
+  case file:consult(Path) of
+    {ok, [Config]} ->
+      case proplists:get_value(agent_framework, Config, []) of
+        AgentFrameworkEnv when is_list(AgentFrameworkEnv) ->
+          case proplists:get_value(agents, AgentFrameworkEnv, []) of
+            Agents when is_list(Agents) -> Agents;
+            _ -> []
+          end;
+        _ ->
+          []
+      end;
+    _ ->
+      []
+  end.

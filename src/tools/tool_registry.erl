@@ -38,19 +38,32 @@ start()      -> gen_server:start({local, ?MODULE}, ?MODULE, [], []).
 %% Each SchemaMap must include a 'function' key with the function name to call.
 %% Idempotent — safe to call multiple times.
 %% ---------------------------------------------------------------------------
-load_for_run(AgentId, ToolModules) ->
+load_for_run(AgentId, ToolNames) when is_list(ToolNames) ->
+  clear_agent_tools(AgentId),
+  ToolModules = application:get_env(agent_framework, tool_modules, []),
   lists:foreach(fun(Module) ->
-    try
-      Schemas = Module:schemas(),
-      lists:foreach(fun({ToolName, Schema}) ->
-        FunctionName = maps:get(function, Schema),
-        ets:insert(agent_tools, {{AgentId, ToolName}, {Module, FunctionName, Schema}}),
-        af_logger:info(tool_loaded, #{agent => AgentId, tool => ToolName, function => FunctionName})
-      end, Schemas)
-    catch C:R ->
-      af_logger:error(tool_load_failed, #{agent => AgentId, module => Module, class => C, reason => R})
+    case catch Module:schemas() of
+      Schemas when is_list(Schemas) ->
+        lists:foreach(fun({ToolName, Schema}) ->
+          case lists:member(ToolName, ToolNames) of
+            true ->
+              FunctionName = maps:get(function, Schema),
+              ets:insert(agent_tools, {{AgentId, ToolName}, {Module, FunctionName, Schema}}),
+              af_logger:info(tool_loaded, #{agent => AgentId, tool => ToolName, function => FunctionName});
+            false ->
+              ok
+          end
+        end, Schemas);
+      _ ->
+        af_logger:error(tool_load_failed, #{agent => AgentId, module => Module, reason => invalid_schemas})
     end
   end, ToolModules),
+  ok.
+
+clear_agent_tools(AgentId) ->
+  Pattern = {{AgentId, '$1'}, '_'},
+  Keys = [ {AgentId, ToolName} || {{Aid, ToolName}, _} <- ets:match_object(agent_tools, Pattern), Aid =:= AgentId ],
+  lists:foreach(fun(Key) -> ets:delete(agent_tools, Key) end, Keys),
   ok.
 
 %% ---------------------------------------------------------------------------

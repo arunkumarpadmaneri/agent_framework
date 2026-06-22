@@ -88,6 +88,7 @@ resolve_profile(Profile) ->
 provider_to_adapter(claude) -> llm_claude;
 provider_to_adapter(openai) -> llm_openai;
 provider_to_adapter(gemini) -> llm_gemini;
+provider_to_adapter(test)   -> llm_test_adapter;
 provider_to_adapter(X)      -> error({unknown_provider, X}).
 
 profile_timeout(Profile) ->

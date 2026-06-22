@@ -2,6 +2,7 @@
 _build/
 *.beam
 ebin/
+.rebar3/
 
 # Test artifacts
 .eunit/
@@ -18,6 +19,13 @@ logs/
 *.crashdump
 erl_crash.dump
 rebar.lock
+.erlang.mk/
+
+# Build artifacts
+*.o
+*.so
+*.dylib
+*.dll
 
 # Shell logs
 shell.log

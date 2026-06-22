@@ -111,7 +111,7 @@ execute_pipeline(AgentId, Query, Ctx) ->
 %% ---------------------------------------------------------------------------
 run_steps([], _Query, _AgentDef, _Ctx, StepAcc) ->
   %% All steps done — final output is the format step result
-  case maps:get(formatted, StepAcc, undefined) of
+  case maps:get(format, StepAcc, undefined) of
     undefined -> {error, no_format_output};
     Output    -> {ok, Output}
   end;

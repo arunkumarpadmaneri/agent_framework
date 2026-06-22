@@ -97,7 +97,7 @@ parse_steps(RawSteps, AgentId) ->
 clean(B) ->
   Stripped = re:replace(B, <<"```(?:json)?\\s*|\\s*```">>, <<>>,
                [global, {return, binary}]),
-  binary:trim(Stripped).
+  re:replace(Stripped, <<"^\\s+|\\s+$">>, <<>>, [global, {return, binary}]).
 
 get_with_default(Map, Key, Default) ->
   case maps:find(Key, Map) of

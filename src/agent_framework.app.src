@@ -26,7 +26,7 @@
     session_mgr,
     tool_registry]},
   {registered, []},
-  {applications, [kernel, stdlib, jsx]},
+  {applications, [kernel, stdlib, crypto, ssl, inets, jsx]},
   {env, []},
   {mod, {agent_framework_app, []}},
   {links, []}
