@@ -9,40 +9,74 @@
 %% 3. Executes each workflow step in order
 %% 4. Each step gets its own LLM profile from the workflow config
 %%
+%% PARALLEL EXECUTION
+%%   run_all/1 — runs many agents concurrently, up to max_parallel_agents.
+%%   Each agent runs in its own process; results are collected with a timeout.
+%%
 %% PER-STEP LLM SELECTION:
 %%   workflow = [
-%%     #{step => intent,  llm_profile => claude_fast},   ← uses Claude Haiku
-%%     #{step => plan,    llm_profile => claude_fast},   ← uses Claude Haiku
-%%     #{step => execute, llm_profile => none},          ← no LLM
-%%     #{step => format,  llm_profile => claude_standard} ← uses Claude Sonnet
+%%     #{step => intent,  llm_profile => claude_fast},    ← Claude Haiku
+%%     #{step => plan,    llm_profile => claude_fast},    ← Claude Haiku
+%%     #{step => execute, llm_profile => none},           ← no LLM
+%%     #{step => format,  llm_profile => claude_standard} ← Claude Sonnet
 %%   ]
-%%   llm_router:call(Profile, Messages, Prompt) resolves profile → adapter
-%%
-%% WHY GenServer + spawn_link per request?
-%%   GenServer stays responsive — never blocks waiting for LLM.
-%%   Each request is isolated — one crash cannot affect another.
 %% =============================================================================
 
 -module(agent_orchestrator).
 -behaviour(gen_server).
 
--export([start_link/0, run/3]).
+-export([start_link/0, run/3, run_all/1, run_all/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 start_link() ->
   gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 %% ---------------------------------------------------------------------------
-%% run/3 — entry point called by agent_framework:run/3
+%% run/3 — run a single agent, returns {ok, Result} | {error, Reason}
 %% ---------------------------------------------------------------------------
 run(AgentId, Query, Ctx) ->
-  Timeout = application:get_env(agent_framework, pipeline_timeout_ms, 60000),
+  Timeout = af_config:get(pipeline_timeout_ms),
   gen_server:call(?MODULE, {run, AgentId, Query, Ctx}, Timeout).
+
+%% ---------------------------------------------------------------------------
+%% run_all/1,2 — run multiple agents in parallel, returns a result per agent.
+%%
+%%   Results = agent_orchestrator:run_all([
+%%     {hims_agent, <<"Get patient count">>},
+%%     {mis_agent,  <<"Get department summary">>},
+%%     {lims_agent, <<"Get pending lab tests">>}
+%%   ]).
+%%   %% Returns:
+%%   %% #{
+%%   %%   hims_agent => {ok, <<"...">>},
+%%   %%   mis_agent  => {ok, <<"...">>},
+%%   %%   lims_agent => {error, rate_limited}
+%%   %% }
+%%
+%% Each agent runs in its own process. Max concurrent agents is capped by
+%% max_parallel_agents config (default 10). If the list is larger it is
+%% chunked and each chunk runs concurrently.
+%%
+%% run_all/2 accepts a shared context map applied to all agents:
+%%   agent_orchestrator:run_all(Agents, #{user_id => <<"u1">>}).
+%% ---------------------------------------------------------------------------
+run_all(Agents) ->
+  run_all(Agents, #{}).
+
+run_all(Agents, Ctx) when is_list(Agents) ->
+  Timeout    = af_config:get(pipeline_timeout_ms),
+  MaxParallel = af_config:get(max_parallel_agents),
+  Chunks     = chunk(Agents, MaxParallel),
+  lists:foldl(fun(Chunk, Acc) ->
+    ChunkResults = run_chunk(Chunk, Ctx, Timeout),
+    maps:merge(Acc, ChunkResults)
+  end, #{}, Chunks).
+
+%% ---------------------------------------------------------------------------
 
 init([]) -> {ok, #{}}.
 
 handle_call({run, AgentId, Query, Ctx}, From, State) ->
-  %% Spawn a linked process per request — GenServer never blocks
   spawn_link(fun() ->
     Result = execute_pipeline(AgentId, Query, Ctx),
     gen_server:reply(From, Result)
@@ -61,27 +95,22 @@ execute_pipeline(AgentId, Query, Ctx) ->
   ReqId = maps:get(req_id, Ctx, af_lib:req_id()),
   af_logger:info(pipeline_start, #{agent => AgentId, req_id => ReqId, query => Query}),
 
-  %% Step 0 — validate agent exists
   case agent_registry:lookup(AgentId) of
     {error, Reason} ->
       {error, Reason};
 
     {ok, AgentDef} ->
-      %% Step 0b — rate limit check
       case rate_limiter:check(maps:get(role, Ctx, guest)) of
         {error, rate_limited} ->
           {error, rate_limited};
 
         ok ->
-          %% Step 0c — enrich context with session history
           Ctx1     = session_mgr:enrich(Ctx),
           Workflow = maps:get(workflow, AgentDef),
           Tools    = maps:get(tools,    AgentDef),
 
-          %% Step 0d — load this agent's tools into registry
           ok = tool_registry:load_for_run(AgentId, Tools),
 
-          %% Dispatch: react loop or fixed step pipeline
           Result = case Workflow of
             #{mode := react, llm_profile := ReactProfile} ->
               agent_react:run(Query, AgentDef, Ctx1, ReactProfile);
@@ -89,7 +118,6 @@ execute_pipeline(AgentId, Query, Ctx) ->
               run_steps(Steps, Query, AgentDef, Ctx1, #{})
           end,
 
-          %% Save exchange to session
           session_mgr:record(Ctx1, Query, Result),
 
           af_logger:info(pipeline_done, #{
@@ -103,19 +131,8 @@ execute_pipeline(AgentId, Query, Ctx) ->
 
 %% ---------------------------------------------------------------------------
 %% run_steps/5 — execute each workflow step in sequence
-%%
-%% Steps is the ordered workflow list from the agent definition.
-%% StepAcc accumulates outputs from each step for use by later steps.
-%%
-%% The pipeline carries forward:
-%%   StepAcc = #{
-%%     intent  => IntentMap,       %% set after intent step
-%%     plan    => PlanMap,         %% set after plan step
-%%     results => ToolResultMap    %% set after execute step
-%%   }
 %% ---------------------------------------------------------------------------
 run_steps([], _Query, _AgentDef, _Ctx, StepAcc) ->
-  %% All steps done — final output is the format step result
   case maps:get(format, StepAcc, undefined) of
     undefined -> {error, no_format_output};
     Output    -> {ok, Output}
@@ -130,49 +147,65 @@ run_steps([#{step := StepName, llm_profile := LLMProfile} | Rest],
     profile => LLMProfile
   }),
 
-  %% Run the step — each step module gets (Query, AgentDef, Ctx, StepAcc, LLMProfile)
   StepResult = run_step(StepName, LLMProfile, Query, AgentDef, Ctx, StepAcc),
 
   case StepResult of
     {ok, StepOutput} ->
-      %% Accumulate this step's output and continue
       NewAcc = maps:put(StepName, StepOutput, StepAcc),
       run_steps(Rest, Query, AgentDef, Ctx, NewAcc);
-
     {error, _} = Err ->
-      %% Step failed — abort pipeline, return error
       af_logger:error(step_failed, #{step => StepName, err => Err}),
       Err
   end.
 
-%% ---------------------------------------------------------------------------
-%% run_step/6 — dispatch to the correct step module
-%% ---------------------------------------------------------------------------
-
-%% INTENT STEP — classify query using agent's intent LLM profile
-run_step(intent, LLMProfile, Query, AgentDef, Ctx, _StepAcc) ->
+run_step(intent,  LLMProfile, Query,  AgentDef, Ctx, _StepAcc) ->
   agent_intent:run(Query, AgentDef, Ctx, LLMProfile);
-
-%% PLAN STEP — build execution plan from intent
-run_step(plan, LLMProfile, _Query, AgentDef, Ctx, StepAcc) ->
-  Intent = maps:get(intent, StepAcc),
-  agent_planner:run(Intent, AgentDef, Ctx, LLMProfile);
-
-%% EXECUTE STEP — run tools, no LLM involved
-run_step(execute, _LLMProfile, _Query, AgentDef, _Ctx, StepAcc) ->
-  Plan = maps:get(plan, StepAcc),
-  agent_executor:run(Plan, AgentDef);
-
-%% FORMAT STEP — format results using agent's format LLM profile
-run_step(format, LLMProfile, Query, AgentDef, Ctx, StepAcc) ->
-  Plan    = maps:get(plan,    StepAcc),
-  Results = maps:get(execute, StepAcc),
-  agent_formatter:run(Query, Plan, Results, AgentDef, Ctx, LLMProfile);
-
-%% Unknown step — config error
+run_step(plan,    LLMProfile, _Query, AgentDef, Ctx,  StepAcc) ->
+  agent_planner:run(maps:get(intent, StepAcc), AgentDef, Ctx, LLMProfile);
+run_step(execute, _,          _Query, AgentDef, _Ctx, StepAcc) ->
+  agent_executor:run(maps:get(plan, StepAcc), AgentDef);
+run_step(format,  LLMProfile, Query,  AgentDef, Ctx,  StepAcc) ->
+  agent_formatter:run(Query, maps:get(plan, StepAcc),
+                      maps:get(execute, StepAcc), AgentDef, Ctx, LLMProfile);
 run_step(Unknown, _, _, _, _, _) ->
   af_logger:error(unknown_step, #{step => Unknown}),
   {error, {unknown_workflow_step, Unknown}}.
+
+%% =============================================================================
+%% PARALLEL HELPERS
+%% =============================================================================
+
+%% Run one chunk of agents concurrently, collect all results.
+run_chunk(Chunk, Ctx, Timeout) ->
+  Parent = self(),
+  Pids   = lists:map(fun({AgentId, Query}) ->
+    Pid = spawn_link(fun() ->
+      Result = execute_pipeline(AgentId, Query, Ctx),
+      Parent ! {agent_result, AgentId, Result}
+    end),
+    {AgentId, Pid}
+  end, Chunk),
+  collect_results(Pids, Timeout, #{}).
+
+collect_results([], _Timeout, Acc) ->
+  Acc;
+collect_results(Pids, Timeout, Acc) ->
+  receive
+    {agent_result, AgentId, Result} ->
+      Remaining = lists:keydelete(AgentId, 1, Pids),
+      collect_results(Remaining, Timeout, maps:put(AgentId, Result, Acc))
+  after Timeout ->
+    %% Mark timed-out agents and return what we have
+    lists:foldl(fun({AgentId, _Pid}, A) ->
+      maps:put(AgentId, {error, timeout}, A)
+    end, Acc, Pids)
+  end.
+
+%% Split a list into chunks of size N.
+chunk([], _N) -> [];
+chunk(List, N) ->
+  {Head, Tail} = lists:split(min(N, length(List)), List),
+  [Head | chunk(Tail, N)].
 
 status_of({ok, _})    -> ok;
 status_of({error, _}) -> error.

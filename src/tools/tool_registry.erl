@@ -40,7 +40,7 @@ start()      -> gen_server:start({local, ?MODULE}, ?MODULE, [], []).
 %% ---------------------------------------------------------------------------
 load_for_run(AgentId, ToolNames) when is_list(ToolNames) ->
   clear_agent_tools(AgentId),
-  ToolModules = application:get_env(agent_framework, tool_modules, []),
+  ToolModules = af_config:get(tool_modules),
   lists:foreach(fun(Module) ->
     case catch Module:schemas() of
       Schemas when is_list(Schemas) ->

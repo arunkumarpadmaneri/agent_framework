@@ -51,7 +51,7 @@ run_sequential([#{step_id := Id, tool := Tool, params := Params} | Rest], AgentI
 
 run_parallel(Steps, AgentId) ->
   Parent  = self(),
-  Timeout = application:get_env(agent_framework, pipeline_timeout_ms, 30000),
+  Timeout = af_config:get(pipeline_timeout_ms),
 
   StepIds = lists:map(fun(#{step_id := Id, tool := Tool, params := Params}) ->
     spawn_link(fun() ->

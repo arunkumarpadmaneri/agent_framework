@@ -40,7 +40,7 @@ handle_call(_,_,S) -> {reply, ok, S}.
 handle_cast(_,S)   -> {noreply, S}.
 
 handle_info(cleanup, State) ->
-  TTL    = application:get_env(agent_framework, session_ttl_seconds, 1800),
+  TTL    = af_config:get(session_ttl_seconds),
   Cutoff = erlang:system_time(second) - TTL,
   ets:select_delete(af_sessions, [
     {{'_', #{last_seen => '$1'}}, [{'<', '$1', Cutoff}], [true]}

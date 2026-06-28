@@ -58,8 +58,8 @@ terminate(_Reason, _State) -> ok.
 do_call(Profile, Messages, System) ->
   Config  = resolve_profile(Profile),
   Adapter = provider_to_adapter(maps:get(provider, Config)),
-  Retries = application:get_env(agent_framework, retry_attempts, 3),
-  BaseMs  = application:get_env(agent_framework, retry_base_ms,  1000),
+  Retries = af_config:get(retry_attempts),
+  BaseMs  = af_config:get(retry_base_ms),
 
   af_logger:info(llm_call, #{profile => Profile, provider => maps:get(provider, Config)}),
 
@@ -67,7 +67,7 @@ do_call(Profile, Messages, System) ->
 
 %% Resolve profile atom → config map from sys.config llm_profiles
 resolve_profile(Profile) ->
-  Profiles = application:get_env(agent_framework, llm_profiles, []),
+  Profiles = af_config:llm_profiles(),
   case proplists:get_value(Profile, Profiles) of
     undefined ->
       af_logger:error(unknown_llm_profile, #{profile => Profile}),
@@ -93,7 +93,7 @@ provider_to_adapter(test)   -> llm_test_adapter;
 provider_to_adapter(X)      -> error({unknown_provider, X}).
 
 profile_timeout(Profile) ->
-  Profiles = application:get_env(agent_framework, llm_profiles, []),
+  Profiles = af_config:llm_profiles(),
   case proplists:get_value(Profile, Profiles) of
     undefined -> 30000;
     Raw       -> proplists:get_value(timeout_ms, Raw, 30000)

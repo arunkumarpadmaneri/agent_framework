@@ -31,7 +31,7 @@
 %% ---------------------------------------------------------------------------
 run(Query, AgentDef, _Ctx, LLMProfile) ->
   AgentId  = maps:get(id, AgentDef),
-  MaxIter  = application:get_env(agent_framework, react_max_iterations, ?DEFAULT_MAX_ITER),
+  MaxIter  = af_config:get(react_max_iterations),
   Schemas  = tool_registry:schemas_for(AgentId),
   SysPrompt = build_system_prompt(Schemas, AgentDef),
   InitMsgs  = [#{<<"role">> => <<"user">>, <<"content">> => Query}],
