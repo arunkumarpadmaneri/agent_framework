@@ -74,9 +74,10 @@ terminate(_Reason, _State)      -> ok.
 %% ─── INTERNAL ────────────────────────────────────────────────────────────────
 
 load_agents() ->
-  BaseAgents   = application:get_env(agent_framework, agents, []),
-  DomainAgents = load_domain_configs(),
-  Agents       = BaseAgents ++ DomainAgents,
+  BaseAgents      = application:get_env(agent_framework, agents, []),
+  ConstantAgents  = load_from_constants(),
+  ConfigAgents    = load_domain_configs(),
+  Agents          = BaseAgents ++ ConstantAgents ++ ConfigAgents,
   lists:foreach(fun(Def) ->
     case maps:find(id, Def) of
       {ok, Id} ->
@@ -86,6 +87,27 @@ load_agents() ->
         af_logger:error(agent_load_failed, #{reason => invalid_definition, def => Def})
     end
   end, Agents).
+
+%% Load agents from Erlang constant modules (preferred approach)
+load_from_constants() ->
+  ConstantModules = [
+    hospital_constants,
+    ecommerce_constants,
+    api_example_constants
+  ],
+  lists:flatmap(fun(Module) ->
+    case code:ensure_loaded(Module) of
+      {module, Module} ->
+        try Module:agents() of
+          Agents when is_list(Agents) -> Agents;
+          _ -> []
+        catch
+          _:_ -> []
+        end;
+      {error, _} ->
+        []
+    end
+  end, ConstantModules).
 
 load_domain_configs() ->
   ConfigDir = "config/domains",

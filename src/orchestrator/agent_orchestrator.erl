@@ -81,8 +81,13 @@ execute_pipeline(AgentId, Query, Ctx) ->
           %% Step 0d — load this agent's tools into registry
           ok = tool_registry:load_for_run(AgentId, Tools),
 
-          %% Run workflow steps in order
-          Result = run_steps(Workflow, Query, AgentDef, Ctx1, #{}),
+          %% Dispatch: react loop or fixed step pipeline
+          Result = case Workflow of
+            #{mode := react, llm_profile := ReactProfile} ->
+              agent_react:run(Query, AgentDef, Ctx1, ReactProfile);
+            Steps when is_list(Steps) ->
+              run_steps(Steps, Query, AgentDef, Ctx1, #{})
+          end,
 
           %% Save exchange to session
           session_mgr:record(Ctx1, Query, Result),
